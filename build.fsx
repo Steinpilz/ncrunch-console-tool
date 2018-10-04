@@ -1,5 +1,4 @@
 #r "paket:
-open Fake.Core
 nuget FSharp.Data
 nuget System.IO.Compression.ZipFile
 nuget Fake.DotNet.Cli
