@@ -122,28 +122,48 @@ let cd = System.Environment.CurrentDirectory
 let zipFile = cd @@ "NCrunch.ConsoleTool.zip"
 let zipUnpackDir = cd @@ "NCrunch.ConsoleTool"
 
-// TODO: it can be done better
-do downloadToolZip <| toolUrl <| zipFile
-try
-    do System.IO.Compression.ZipFile.ExtractToDirectory (zipFile, zipUnpackDir)
-    try
-        let ncrunchToolDir = zipUnpackDir |> System.IO.Directory.GetDirectories |> System.Linq.Enumerable.Single
-        let ncrunchToolDirName = ncrunchToolDir |> System.IO.Path.GetFileName
-        if ncrunchToolDirName <> "NCrunch Console Tool" then failwithf "downloaded zip has bad dir name %s" <| ncrunchToolDirName
-        let packNuspecFile = zipUnpackDir @@ "NCrunch.ConsoleTool.nuspec"
-        let packCsprojFile = zipUnpackDir @@ "NCrunch.ConsoleTool.csproj"
-        do toolVer |> generateNuspec |> File.writeString false packNuspecFile
-        do () |> generatePackCsproj |> File.writeString false packCsprojFile
-        do packCsprojFile |> DotNet.pack (fun cfg -> { cfg with OutputPath = Some zipUnpackDir })
-        let packFileName = toolVer |> ncrunchVerToSemVer |> sprintf "NCrunch.ConsoleTool.%s.nupkg"
-        let packFile = zipUnpackDir @@ packFileName
+let parseNugetNCrunchVersion (str: string) =
+    let parts = str.Split('.')
+    if parts.Length <> 3 then failwithf "bad nuget NCrunch version %s" <| str
+    { Major = parts.[0] |> int; Minor = parts.[1] |> int }
 
-        let nugetSource = "https://api.nuget.org/v3/index.json"
-        let nugetApiKey = Environment.environVarOrFail "NUGET_API_KEY"
-        let dotnetNugetPushCmd = sprintf "push %s -s %s -k %s" <| packFile <| nugetSource <| nugetApiKey
-        let pushRes = DotNet.exec (fun cfg -> { cfg with WorkingDirectory = ncrunchToolDir }) "nuget" dotnetNugetPushCmd
-        if not pushRes.OK then failwith "push failed"
+// use a json parser instead of this
+let nugetVersion =
+    let url = "https://api.nuget.org/v3/registration3/ncrunch.consoletool/index.json"
+    use wc = new System.Net.WebClient() 
+    let json = wc.DownloadString(url)
+    let s1 = "\"version\":\""
+    let s2 = "\""
+    let i1 = json.LastIndexOf(s1) + s1.Length
+    let i2 = json.IndexOf(s2, i1)
+    let version = json.Substring(i1, i2 - i1)
+    version |> parseNugetNCrunchVersion
+
+// TODO: it can be done better
+if toolVer = nugetVersion then
+    do printfn "nuget has the latest tool version %d.%d" <| toolVer.Major <| toolVer.Minor
+else
+    do downloadToolZip <| toolUrl <| zipFile
+    try
+        do System.IO.Compression.ZipFile.ExtractToDirectory (zipFile, zipUnpackDir)
+        try
+            let ncrunchToolDir = zipUnpackDir |> System.IO.Directory.GetDirectories |> System.Linq.Enumerable.Single
+            let ncrunchToolDirName = ncrunchToolDir |> System.IO.Path.GetFileName
+            if ncrunchToolDirName <> "NCrunch Console Tool" then failwithf "downloaded zip has bad dir name %s" <| ncrunchToolDirName
+            let packNuspecFile = zipUnpackDir @@ "NCrunch.ConsoleTool.nuspec"
+            let packCsprojFile = zipUnpackDir @@ "NCrunch.ConsoleTool.csproj"
+            do toolVer |> generateNuspec |> File.writeString false packNuspecFile
+            do () |> generatePackCsproj |> File.writeString false packCsprojFile
+            do packCsprojFile |> DotNet.pack (fun cfg -> { cfg with OutputPath = Some zipUnpackDir })
+            let packFileName = toolVer |> ncrunchVerToSemVer |> sprintf "NCrunch.ConsoleTool.%s.nupkg"
+            let packFile = zipUnpackDir @@ packFileName
+
+            let nugetSource = "https://api.nuget.org/v3/index.json"
+            let nugetApiKey = Environment.environVarOrFail "NUGET_API_KEY"
+            let dotnetNugetPushCmd = sprintf "push %s -s %s -k %s" <| packFile <| nugetSource <| nugetApiKey
+            let pushRes = DotNet.exec (fun cfg -> { cfg with WorkingDirectory = ncrunchToolDir }) "nuget" dotnetNugetPushCmd
+            if not pushRes.OK then failwith "push failed"
+        finally
+            do Directory.delete <| zipUnpackDir
     finally
-        do Directory.delete <| zipUnpackDir
-finally
-    do File.delete <| zipFile
+        do File.delete <| zipFile
